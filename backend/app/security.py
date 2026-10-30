@@ -1,0 +1,43 @@
+import os
+from datetime import datetime, timedelta, timezone
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+from .database import get_db
+from .models import User
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET = os.getenv("JWT_SECRET", "dev-only-change-this-secret-before-deploying")
+ALGORITHM = "HS256"
+bearer = HTTPBearer(auto_error=False)
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, hashed: str) -> bool:
+    return pwd_context.verify(password, hashed)
+
+def create_token(user: User):
+    payload = {"sub": str(user.id), "role": user.role,
+               "exp": datetime.now(timezone.utc) + timedelta(hours=24)}
+    return jwt.encode(payload, SECRET, algorithm=ALGORITHM)
+
+def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer),
+                 db: Session = Depends(get_db)):
+    if not credentials:
+        raise HTTPException(401, "Authentication required")
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET, algorithms=[ALGORITHM])
+        user = db.get(User, int(payload["sub"]))
+    except (JWTError, ValueError, KeyError):
+        user = None
+    if not user:
+        raise HTTPException(401, "Invalid or expired token")
+    return user
+
+def require_staff(user: User = Depends(current_user)):
+    if user.role != "staff":
+        raise HTTPException(403, "Staff access required")
+    return user
